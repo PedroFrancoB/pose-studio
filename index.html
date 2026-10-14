@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pose Studio</title>
+  <meta name="description" content="Envie uma foto, mude a pose num boneco 3D e exporte depth map, máscara e referência de pose para IA.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='6' r='4' fill='%23ffe14d'/%3E%3Cpath d='M16 11v10M8 13l8 3 8-6M16 21l-5 9M16 21l5 9' stroke='%23ffe14d' stroke-width='3' stroke-linecap='round' fill='none'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+      "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs",
+      "@huggingface/transformers": "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2/dist/transformers.min.js"
+    }
+  }
+  </script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="dot"></span>Pose Studio</div>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+  </header>
+
+  <main class="app">
+    <aside class="panel">
+      <section class="step">
+        <h2><span class="n">1</span>Imagem</h2>
+        <button class="btn primary" id="pick">Carregar foto…</button>
+        <input type="file" id="file" accept="image/*" hidden>
+        <div class="row needs-image">
+          <label class="field grow">Modelo de depth
+            <select id="depthModel">
+              <option value="onnx-community/depth-anything-v2-small" selected>Depth Anything V2 Small (rápido)</option>
+              <option value="onnx-community/depth-anything-v2-base">Depth Anything V2 Base (melhor, uso não comercial)</option>
+            </select>
+          </label>
+        </div>
+        <div class="row needs-image">
+          <button class="btn" id="depthRerun">Recalcular depth</button>
+          <button class="btn" id="depthUpload">Usar meu depth map…</button>
+          <input type="file" id="depthFile" accept="image/*" hidden>
+        </div>
+      </section>
+
+      <section class="step needs-image">
+        <h2><span class="n">2</span>Modo</h2>
+        <div class="seg">
+          <button data-mode="align" class="active">Alinhar ao original</button>
+          <button data-mode="pose">Nova pose</button>
+        </div>
+        <p class="hint mode-align">Corrija a detecção: arraste cada ponto até a articulação certa na foto. Aqui cada ponto se move sozinho, e o ponto central do quadril move o boneco inteiro.</p>
+        <p class="hint mode-pose">Arraste mãos, pés e articulações. Os comprimentos dos ossos são mantidos. Rosa = pose original.</p>
+        <div class="mode-align">
+          <label class="field">Campo de visão da câmera <b id="fovVal">40°</b>
+            <input type="range" id="fov" min="15" max="90" step="1" value="40">
+          </label>
+          <button class="btn" id="refit">Refazer encaixe automático</button>
+        </div>
+        <div class="mode-pose">
+          <label class="check"><input type="checkbox" id="ik" checked> IK em pulsos e tornozelos (o cotovelo/joelho acompanha)</label>
+          <button class="btn" id="resetPose">Voltar à pose original</button>
+        </div>
+        <div class="row">
+          <button class="btn" id="undo" title="Ctrl+Z">Desfazer</button>
+          <button class="btn" id="redo" title="Ctrl+Shift+Z">Refazer</button>
+        </div>
+        <label class="field">Opacidade do boneco
+          <input type="range" id="opacity" min="0.1" max="1" step="0.05" value="0.6">
+        </label>
+        <div class="kbd">
+          <div><b>Selecionado:</b> <span id="selName">—</span></div>
+          <div>Roda do mouse ou <kbd>Q</kbd>/<kbd>E</kbd> sobre o ponto: aproxima/afasta da câmera</div>
+          <div>Vista lateral: arraste os pontos para ajustar profundidade</div>
+        </div>
+      </section>
+
+      <section class="step needs-image">
+        <h2><span class="n">3</span>Exportar</h2>
+        <label class="check"><input type="checkbox" id="fullBody"> Substituir o corpo inteiro pelo boneco</label>
+        <label class="check"><input type="checkbox" id="cleanGuide" checked> Apagar o membro antigo no Guia</label>
+        <label class="field">Limpeza do membro antigo <input type="range" id="removePad" min="0" max="40" step="1" value="10"></label>
+        <label class="field">Margem da máscara <input type="range" id="maskPad" min="0" max="60" step="1" value="16"></label>
+        <label class="field">Suavizar borda da máscara <input type="range" id="feather" min="0" max="30" step="1" value="6"></label>
+        <label class="field">Profundidade do boneco (ajuste fino) <input type="range" id="offset" min="-0.2" max="0.2" step="0.005" value="0"></label>
+        <div class="grid2">
+          <button class="btn" data-download="depth">Depth</button>
+          <button class="btn" data-download="mask">Máscara</button>
+          <button class="btn" data-download="mannequin">Boneco</button>
+          <button class="btn" data-download="guide">Guia</button>
+          <button class="btn" data-download="openpose">OpenPose</button>
+          <button class="btn primary" id="downloadZip">Tudo (.zip)</button>
+        </div>
+        <label class="field">Prompt sugerido (Nano Banana / Seedream)
+          <textarea id="prompt" rows="7" spellcheck="false"></textarea>
+        </label>
+        <div class="row">
+          <button class="btn" id="copyPrompt">Copiar prompt</button>
+          <button class="btn" id="resetPrompt">Regenerar</button>
+        </div>
+        <p class="hint">Imagem 1 = sua foto original. Imagem 2 = <b>Boneco</b> ou <b>Guia</b>. Use a <b>Máscara</b> em ferramentas com inpainting e o <b>Depth</b>/<b>OpenPose</b> em ControlNet/Flux.</p>
+      </section>
+    </aside>
+
+    <section class="stage" id="stage">
+      <nav class="tabs needs-image" aria-label="Visualização">
+        <button data-tab="edit" class="active">Editar</button>
+        <button data-tab="depth">Depth</button>
+        <button data-tab="mask">Máscara</button>
+        <button data-tab="pose">Boneco</button>
+        <button data-tab="guide">Guia</button>
+        <button data-tab="openpose">OpenPose</button>
+        <span class="spacer"></span>
+        <button id="toggleSide" title="Mostrar/ocultar vista lateral">Vista lateral</button>
+      </nav>
+
+      <div class="empty" id="empty">
+        <div class="empty-card">
+          <h1>Mude a pose de uma foto sem mudar a câmera</h1>
+          <p>Arraste uma imagem aqui ou</p>
+          <button class="btn primary" id="emptyPick">Escolher foto</button>
+          <p class="small">Tudo roda no seu navegador. A foto não é enviada para nenhum servidor.</p>
+        </div>
+      </div>
+
+      <div class="viewWrap" id="viewWrap" hidden>
+        <canvas id="photo"></canvas>
+        <canvas id="view3d"></canvas>
+      </div>
+
+      <div class="sidePanel" id="sidePanel">
+        <div class="sideHead"><span>Vista lateral</span><button id="sideReset" title="Recentralizar">⟲</button></div>
+        <canvas id="side"></canvas>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
