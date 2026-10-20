@@ -9,6 +9,7 @@ import {
   estimateDepth, depthFromImage, resizeBilinear, dilate, composeDepth, changeMask, fitDepthMapping, grayToCanvas, fillColor, propagateLabels,
 } from './depth.js';
 import { renderOpenPose, canvasToBlob, downloadBlob, downloadZip } from './exports.js';
+import { buildSheet, diffOverlay, tint, overlayOf, jointMoves } from './compare.js';
 
 const MAX_SIDE = 2048;
 const POSE_MODEL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task';
@@ -20,7 +21,9 @@ const ui = {
   sidePanel: $('#sidePanel'), empty: $('#empty'), status: $('#status'), file: $('#file'), depthFile: $('#depthFile'),
   fov: $('#fov'), fovVal: $('#fovVal'), opacity: $('#opacity'), ik: $('#ik'), fullBody: $('#fullBody'),
   removePad: $('#removePad'), maskPad: $('#maskPad'), feather: $('#feather'), offset: $('#offset'),
-  prompt: $('#prompt'), cleanGuide: $('#cleanGuide'), depthModel: $('#depthModel'), selName: $('#selName'),
+  prompt: $('#prompt'), cleanGuide: $('#cleanGuide'), refMode: $('#refMode'),
+  cmpPhoto: $('#cmpPhoto'), cmpDepth: $('#cmpDepth'), cmpMannequin: $('#cmpMannequin'), cmpOpenpose: $('#cmpOpenpose'),
+  cmpChange: $('#cmpChange'), cmpArrows: $('#cmpArrows'), depthModel: $('#depthModel'), selName: $('#selName'),
 };
 
 const state = {
@@ -146,12 +149,13 @@ function requestRender() {
 controls.addEventListener('change', requestRender);
 
 // ---------- Layout ----------
-function layout() {
+function layout(cw = ui.photo.width || state.W, ch = ui.photo.height || state.H) {
   if (!state.W) return;
+  if (typeof cw !== 'number') { cw = ui.photo.width || state.W; ch = ui.photo.height || state.H; }
   const r = ui.stage.getBoundingClientRect();
   const pad = 24;
-  const s = Math.min((r.width - pad * 2) / state.W, (r.height - pad * 2) / state.H);
-  const w = Math.max(50, Math.floor(state.W * s)), h = Math.max(50, Math.floor(state.H * s));
+  const s = Math.min((r.width - pad * 2) / cw, (r.height - pad * 2) / ch);
+  const w = Math.max(50, Math.floor(cw * s)), h = Math.max(50, Math.floor(ch * s));
   ui.wrap.style.width = w + 'px';
   ui.wrap.style.height = h + 'px';
   renderer.setSize(w, h, true);
@@ -198,7 +202,20 @@ async function loadImage(file) {
   runDepth();
 }
 
+// The comparison sheet has its own aspect ratio, so the stage resizes to fit it.
+function showCanvas(c) {
+  if (c.width !== ui.photo.width || c.height !== ui.photo.height) {
+    ui.photo.width = c.width; ui.photo.height = c.height;
+  }
+  layout(c.width, c.height);
+  ui.photo.getContext('2d').drawImage(c, 0, 0);
+}
+
 function drawPhoto(source = state.photoCanvas) {
+  if (ui.photo.width !== state.W || ui.photo.height !== state.H) {
+    ui.photo.width = state.W; ui.photo.height = state.H;
+    layout();
+  }
   const ctx = ui.photo.getContext('2d');
   ctx.clearRect(0, 0, state.W, state.H);
   ctx.drawImage(source, 0, 0, state.W, state.H);
@@ -503,21 +520,68 @@ function computeOutputs() {
   }
   out.guide = guide;
   out.openpose = renderOpenPose(state.pose, W, H, f);
+  out.removed = removed;
+  out.newMask = newMask;
   state.outputs = out;
   state.outputsDirty = false;
   updatePrompt(changedNames);
   return out;
 }
 
+// Before / after / change sheet, built on demand from the current outputs.
+function computeCompare() {
+  const out = computeOutputs();
+  if (out.compare) return out.compare;
+  const { W, H } = state;
+  const changedNames = out.changedNames;
+  const oldOnly = out.removed.map((v, i) => (v && !out.newMask[i] ? 1 : 0));
+  const rows = [];
+  if (ui.cmpPhoto.checked) {
+    rows.push({ name: 'photo', before: state.photoCanvas, after: out.guide,
+      change: diffOverlay(state.photoCanvas, oldOnly, out.newMask, W, H), arrowsOn: ['change'] });
+  }
+  if (ui.cmpDepth.checked && state.D && out.depth) {
+    rows.push({ name: 'depth', before: grayToCanvas(state.D, W, H), after: out.depth,
+      change: diffOverlay(out.depth, oldOnly, out.newMask, W, H, 0.75), arrowsOn: ['change'] });
+  }
+  if (ui.cmpMannequin.checked) {
+    const before = offscreen.renderShaded(offMannequin, state.pose0, camera, W, H, { bg: 0xd9d9d9 });
+    let change = out.poseRender;
+    if (changedNames.size) {
+      const oldParts = offscreen.renderShaded(offMannequin, state.pose0, camera, W, H, { segments: changedNames });
+      const newParts = offscreen.renderShaded(offMannequin, state.pose, camera, W, H, { segments: changedNames });
+      change = overlayOf(overlayOf(out.poseRender, tint(oldParts, 'rgb(255,70,70)', 0.85), 0.6), tint(newParts, 'rgb(60,230,120)', 0.55));
+    }
+    rows.push({ name: 'mannequin', before, after: out.poseRender, change, arrowsOn: ['change'] });
+  }
+  if (ui.cmpOpenpose.checked) {
+    const before = renderOpenPose(state.pose0, W, H, out.f);
+    const change = document.createElement('canvas');
+    change.width = W; change.height = H;
+    const cx = change.getContext('2d');
+    cx.globalAlpha = 0.35;
+    cx.drawImage(before, 0, 0);
+    cx.globalAlpha = 1;
+    cx.globalCompositeOperation = 'lighten';
+    cx.drawImage(out.openpose, 0, 0);
+    rows.push({ name: 'openpose', before, after: out.openpose, change, arrowsOn: ['change'] });
+  }
+  if (!rows.length) rows.push({ name: 'photo', before: state.photoCanvas, after: out.guide, change: null, arrowsOn: ['after'] });
+  const moves = jointMoves(state.pose0, state.pose, W, H, out.f, Math.max(4, W / 250));
+  out.compare = buildSheet({ rows, W, H, moves, showChange: ui.cmpChange.checked, showArrows: ui.cmpArrows.checked });
+  return out.compare;
+}
+
 function showTab() {
   if (!state.photoCanvas) return;
   ui.view.style.visibility = state.tab === 'edit' ? 'visible' : 'hidden';
+  document.body.dataset.tab = state.tab;
   if (state.tab === 'edit') { drawPhoto(); requestRender(); return; }
   if (!state.pose0) return;
   const out = computeOutputs();
   const map = { depth: out.depth, mask: out.mask, pose: out.poseRender, guide: out.guide, openpose: out.openpose };
-  const c = map[state.tab];
-  if (c) drawPhoto(c);
+  const c = state.tab === 'compare' ? computeCompare() : map[state.tab];
+  if (c) showCanvas(c);
   else {
     drawPhoto();
     const ctx = ui.photo.getContext('2d');
@@ -556,10 +620,25 @@ function updatePrompt(changedNames) {
   const what = ui.fullBody.checked || parts.length > 4 || !parts.length
     ? 'the body pose'
     : 'only the position of the person\'s ' + parts.join(', ').replace(/, ([^,]*)$/, ' and $1') + ' (their own left/right)';
-  ui.prompt.value =
+  const keep = 'Keep the face, expression, hair, clothing, objects in the hands, lighting, film look and the entire background exactly as in image 1.';
+  const mode = ui.refMode.value;
+  if (mode === 'guide') {
+    ui.prompt.value =
+`Edit image 1. Change ${what} to match image 2, which is the same photo with the target position drawn as a gray mannequin.
+Render that body part as the real person (skin, sleeve, hand) in the new position; do not keep any gray mannequin material.
+${keep}`;
+  } else if (mode === 'compare') {
+    ui.prompt.value =
+`Edit image 1. Image 2 is a pose-change reference sheet: the BEFORE column is the current pose, the AFTER column is the target pose, and the CHANGE column marks what moves (red = remove from the old position, green = new position, yellow arrows = movement of each joint).
+Apply exactly that change to image 1: change ${what}. Same camera, same framing, same lens.
+Output one single photograph, not a grid: no labels, arrows, colored overlays or mannequin in the result.
+${keep}`;
+  } else {
+    ui.prompt.value =
 `Edit image 1. Change ${what} to match the gray mannequin in image 2. Same camera, same framing, same lens.
 Image 2 shows the new pose only; do not copy its gray color or material.
-Keep the face, expression, hair, clothing, hands' objects, lighting, film look and the entire background exactly as in image 1.`;
+${keep}`;
+  }
 }
 ui.prompt.addEventListener('input', () => { ui.prompt.dataset.userEdited = '1'; });
 $('#resetPrompt').addEventListener('click', () => { ui.prompt.dataset.userEdited = ''; updatePrompt(computeOutputs().changedNames); });
@@ -599,6 +678,8 @@ ui.fov.addEventListener('change', () => {
   if (state.photoCanvas) fitPose();
 });
 ui.opacity.addEventListener('input', () => { clay.opacity = Number(ui.opacity.value); requestRender(); });
+for (const el of [ui.cmpPhoto, ui.cmpDepth, ui.cmpMannequin, ui.cmpOpenpose, ui.cmpChange, ui.cmpArrows]) el.addEventListener('input', () => { if (state.outputs) state.outputs.compare = null; markDirty(); });
+ui.refMode.addEventListener('input', () => { ui.prompt.dataset.userEdited = ''; if (state.pose0) updatePrompt(computeOutputs().changedNames); });
 for (const el of [ui.fullBody, ui.cleanGuide, ui.removePad, ui.maskPad, ui.feather, ui.offset]) el.addEventListener('input', markDirty);
 
 $('#refit').addEventListener('click', () => { if (state.photoCanvas) { pushUndo(); fitPose(); } });
@@ -626,6 +707,7 @@ async function exportFiles() {
   await add('mannequin', out.poseRender);
   await add('guide', out.guide);
   await add('openpose', out.openpose);
+  await add('compare', computeCompare());
   const json = {
     image: { width: state.W, height: state.H }, fovDeg: state.fov,
     joints: Object.fromEntries(JOINT_NAMES.map((n) => [n, state.pose.p[n].toArray()])),
@@ -643,14 +725,15 @@ document.querySelectorAll('[data-download]').forEach((b) => b.addEventListener('
   if (!state.pose0) return;
   const out = computeOutputs();
   const key = b.dataset.download;
-  const c = { depth: out.depth, mask: out.mask, mannequin: out.poseRender, guide: out.guide, openpose: out.openpose }[key];
+  const c = key === 'compare' ? computeCompare()
+    : { depth: out.depth, mask: out.mask, mannequin: out.poseRender, guide: out.guide, openpose: out.openpose }[key];
   if (!c) { setStatus('Ainda não há depth para exportar.', 'warn'); return; }
   downloadBlob(await canvasToBlob(c), `${state.fileName}_${key}.png`);
 }));
 
 // Expose for debugging / automated checks.
 window.poseStudio = {
-  state, computeOutputs, setTab, setMode, loadImage,
+  state, computeOutputs, setTab, setMode, loadImage, compare: computeCompare,
   handleScreen(name) {
     const r = ui.view.getBoundingClientRect();
     const p = activePose().p[name].clone().project(camera);

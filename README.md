@@ -23,6 +23,7 @@ Tudo roda no navegador. A foto não é enviada para nenhum servidor.
 | `mannequin` | Boneco cinza na pose nova, mesmo enquadramento | Imagem de referência de pose (Nano Banana, Seedream) |
 | `guide` | Foto original com o membro antigo apagado e o boneco na posição nova | Imagem de referência para edição |
 | `openpose` | Esqueleto no padrão OpenPose (COCO-18) | ControlNet OpenPose |
+| `compare` | Folha BEFORE / AFTER / CHANGE com foto, depth, boneco e/ou OpenPose. Vermelho = sai, verde = entra, setas = movimento de cada articulação. | Imagem de referência que explica a mudança (Nano Banana, Seedream) |
 | `pose.json` | Coordenadas 3D das articulações (original e nova) | Reabrir ou depurar |
 
 O painel também sugere um prompt de edição em inglês, montado a partir das partes que você mexeu.

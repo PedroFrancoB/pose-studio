@@ -92,8 +92,27 @@
           <button class="btn" data-download="mannequin">Boneco</button>
           <button class="btn" data-download="guide">Guia</button>
           <button class="btn" data-download="openpose">OpenPose</button>
-          <button class="btn primary" id="downloadZip">Tudo (.zip)</button>
+          <button class="btn" data-download="compare">Comparação</button>
+          <button class="btn primary span2" id="downloadZip">Tudo (.zip)</button>
         </div>
+        <fieldset class="box">
+          <legend>Comparação antes / depois</legend>
+          <div class="checks">
+            <label class="check"><input type="checkbox" id="cmpPhoto" checked> Foto</label>
+            <label class="check"><input type="checkbox" id="cmpDepth" checked> Depth</label>
+            <label class="check"><input type="checkbox" id="cmpMannequin" checked> Boneco</label>
+            <label class="check"><input type="checkbox" id="cmpOpenpose"> OpenPose</label>
+          </div>
+          <label class="check"><input type="checkbox" id="cmpChange" checked> Coluna "mudança" (vermelho sai, verde entra)</label>
+          <label class="check"><input type="checkbox" id="cmpArrows" checked> Setas de movimento</label>
+        </fieldset>
+        <label class="field">Imagem 2 do prompt
+          <select id="refMode">
+            <option value="mannequin">Boneco</option>
+            <option value="guide">Guia</option>
+            <option value="compare" selected>Comparação</option>
+          </select>
+        </label>
         <label class="field">Prompt sugerido (Nano Banana / Seedream)
           <textarea id="prompt" rows="7" spellcheck="false"></textarea>
         </label>
@@ -101,7 +120,7 @@
           <button class="btn" id="copyPrompt">Copiar prompt</button>
           <button class="btn" id="resetPrompt">Regenerar</button>
         </div>
-        <p class="hint">Imagem 1 = sua foto original. Imagem 2 = <b>Boneco</b> ou <b>Guia</b>. Use a <b>Máscara</b> em ferramentas com inpainting e o <b>Depth</b>/<b>OpenPose</b> em ControlNet/Flux.</p>
+        <p class="hint">Imagem 1 = sua foto original. Imagem 2 = a referência escolhida acima (<b>Boneco</b>, <b>Guia</b> ou <b>Comparação</b>). Use a <b>Máscara</b> em ferramentas com inpainting e o <b>Depth</b>/<b>OpenPose</b> em ControlNet/Flux.</p>
       </section>
     </aside>
 
@@ -113,6 +132,7 @@
         <button data-tab="pose">Boneco</button>
         <button data-tab="guide">Guia</button>
         <button data-tab="openpose">OpenPose</button>
+        <button data-tab="compare">Comparação</button>
         <span class="spacer"></span>
         <button id="toggleSide" title="Mostrar/ocultar vista lateral">Vista lateral</button>
       </nav>
